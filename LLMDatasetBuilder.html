@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM Dataset Builder</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            color: #333;
+        }
+        h1, h2 {
+            color: #2c3e50;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+        }
+        .config-panel {
+            flex: 1;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 20px;
+            background-color: #f9f9f9;
+        }
+        .results-panel {
+            flex: 1;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input, select, textarea {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+        button:disabled {
+            background-color: #95a5a6;
+            cursor: not-allowed;
+        }
+        .status {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .tabs {
+            display: flex;
+            margin-bottom: 10px;
+        }
+        .tab {
+            padding: 10px 15px;
+            cursor: pointer;
+            border: 1px solid #ddd;
+            border-radius: 5px 5px 0 0;
+            background-color: #f1f1f1;
+            margin-right: 5px;
+        }
+        .tab.active {
+            background-color: #fff;
+            border-bottom: none;
+        }
+        #jsonOutput, #xmlOutput {
+            width: 100%;
+            height: 400px;
+            font-family: monospace;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            overflow: auto;
+            background-color: #f8f8f8;
+        }
+        .progress-container {
+            margin-top: 15px;
+            width: 100%;
+            background-color: #e0e0e0;
+            border-radius: 4px;
+        }
+        .progress-bar {
+            height: 20px;
+            background-color: #3498db;
+            border-radius: 4px;
+            text-align: center;
+            color: white;
+            line-height: 20px;
+            transition: width 0.3s;
+        }
+        .batch-info {
+            margin-top: 10px;
+            font-style: italic;
+        }
+        details {
+            margin-bottom: 15px;
+        }
+        summary {
+            cursor: pointer;
+            padding: 8px;
+            background-color: #eee;
+            border-radius: 4px;
+        }
+        /* Tag system styles */
+        .tag-row {
+            display: flex;
+            margin-bottom: 8px;
+            align-items: center;
+        }
+        .tag-input {
+            flex-grow: 1;
+            margin-right: 8px;
+            margin-bottom: 0;
+        }
+        .add-tag-btn {
+            padding: 8px 12px;
+            background-color: #27ae60;
+        }
+        .tag-pill {
+            display: inline-block;
+            background-color: #3498db;
+            color: white;
+            padding: 5px 10px;
+            border-radius: 20px;
+            margin-right: 6px;
+            margin-bottom: 6px;
+            font-size: 14px;
+        }
+        .remove-tag {
+            margin-left: 6px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        #tagsList {
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>LLM Dataset Builder</h1>
+    <p>Build focused training datasets by querying OpenAI API-compatible language models.</p>
+
+    <div class="container">
+        <div class="config-panel">
+            <h2>Configuration</h2>
+            
+            <details open>
+                <summary>API Connection</summary>
+                <label for="apiEndpoint">API Endpoint:</label>
+                <input type="text" id="apiEndpoint" placeholder="https://api.openai.com/v1/chat/completions" value="https://api.openai.com/v1/chat/completions">
+                
+                <label for="apiKey">API Key:</label>
+                <input type="password" id="apiKey" placeholder="Your API key">
+                
+                <label for="modelName">Model:</label>
+                <input type="text" id="modelName" placeholder="gpt-4" value="gpt-4">
+            </details>
+            
+            <details open>
+                <summary>Dataset Configuration</summary>
+                <label for="topic">Topic or Domain:</label>
+                <input type="text" id="topic" placeholder="E.g., Medical diagnosis QA pairs">
+                
+                <label for="dataFormat">Output Format:</label>
+                <select id="dataFormat">
+                    <option value="json">JSON</option>
+                    <option value="xml">XML</option>
+                </select>
+                
+                <details>
+                    <summary>Topic Tags</summary>
+                    <div id="tagsContainer">
+                        <div class="tag-row">
+                            <input type="text" class="tag-input" placeholder="Enter a tag (e.g., 'Cardiology')">
+                            <button type="button" class="add-tag-btn">+</button>
+                        </div>
+                    </div>
+                    <div id="tagsList">
+                        <!-- Tags will be displayed here -->
+                    </div>
+                </details>
+                
+                <label for="promptTemplate">Prompt Template:</label>
+                <textarea id="promptTemplate" rows="6" placeholder="Instructions for the model to generate training data...">Generate {count} high-quality question-answer pairs about {topic}. Each pair should include a detailed question and a comprehensive answer. For each pair, assign one or more relevant tags from this list: {tags}. Format the output as valid JSON with an array of objects, each with 'question', 'answer', and 'tags' fields (where 'tags' is an array of applicable tag strings).</textarea>
+                
+                <label for="batchSize">Items per Batch:</label>
+                <input type="number" id="batchSize" min="1" max="100" value="10">
+                
+                <label for="totalItems">Total Items to Generate:</label>
+                <input type="number" id="totalItems" min="1" max="1000" value="50">
+                
+                <label for="temperature">Temperature (0.0-1.0):</label>
+                <input type="range" id="temperature" min="0" max="1" step="0.1" value="0.7">
+                <span id="temperatureValue">0.7</span>
+            </details>
+            
+            <details>
+                <summary>Advanced Options</summary>
+                <label for="maxTokens">Max Tokens per Response:</label>
+                <input type="number" id="maxTokens" min="100" max="8000" value="2000">
+                
+                <label for="requestDelay">Delay Between Requests (ms):</label>
+                <input type="number" id="requestDelay" min="0" max="10000" value="1000">
+                
+                <label for="systemPrompt">System Prompt:</label>
+                <textarea id="systemPrompt" rows="3" placeholder="Instructions for the AI assistant's behavior...">You are a helpful assistant specialized in generating high-quality training data. Always respond with valid structured data in the requested format.</textarea>
+            </details>
+            
+            <button id="generateButton">Generate Dataset</button>
+            <button id="stopButton" disabled>Stop Generation</button>
+            
+            <div id="status" class="status"></div>
+            
+            <div class="progress-container" style="display: none;">
+                <div id="progressBar" class="progress-bar" style="width: 0%">0%</div>
+            </div>
+            <div id="batchInfo" class="batch-info"></div>
+        </div>
+        
+        <div class="results-panel">
+            <h2>Generated Dataset</h2>
+            <div class="tabs">
+                <div class="tab active" id="jsonTab">JSON</div>
+                <div class="tab" id="xmlTab">XML</div>
+            </div>
+            <pre id="jsonOutput"></pre>
+            <pre id="xmlOutput" style="display: none;"></pre>
+            
+            <button id="downloadButton" disabled>Download Dataset</button>
+            <button id="clearButton">Clear Results</button>
+        </div>
+    </div>
+
+    <script>
+        // DOM Elements
+        const apiEndpointInput = document.getElementById('apiEndpoint');
+        const apiKeyInput = document.getElementById('apiKey');
+        const modelNameInput = document.getElementById('modelName');
+        const topicInput = document.getElementById('topic');
+        const dataFormatSelect = document.getElementById('dataFormat');
+        const promptTemplateInput = document.getElementById('promptTemplate');
+        const batchSizeInput = document.getElementById('batchSize');
+        const totalItemsInput = document.getElementById('totalItems');
+        const temperatureInput = document.getElementById('temperature');
+        const temperatureValue = document.getElementById('temperatureValue');
+        const maxTokensInput = document.getElementById('maxTokens');
+        const requestDelayInput = document.getElementById('requestDelay');
+        const systemPromptInput = document.getElementById('systemPrompt');
+        const generateButton = document.getElementById('generateButton');
+        const stopButton = document.getElementById('stopButton');
+        const statusDiv = document.getElementById('status');
+        const progressContainer = document.querySelector('.progress-container');
+        const progressBar = document.getElementById('progressBar');
+        const batchInfoDiv = document.getElementById('batchInfo');
+        const jsonOutput = document.getElementById('jsonOutput');
+        const xmlOutput = document.getElementById('xmlOutput');
+        const jsonTab = document.getElementById('jsonTab');
+        const xmlTab = document.getElementById('xmlTab');
+        const downloadButton = document.getElementById('downloadButton');
+        const clearButton = document.getElementById('clearButton');
+        const tagsContainer = document.getElementById('tagsContainer');
+        const tagsList = document.getElementById('tagsList');
+
+        // State variables
+        let isGenerating = false;
+        let shouldStop = false;
+        let completeDataset = [];
+        let topicTags = [];
+        
+        // Update temperature display
+        temperatureInput.addEventListener('input', () => {
+            temperatureValue.textContent = temperatureInput.value;
+        });
+        
+        // Tab switching
+        jsonTab.addEventListener('click', () => {
+            jsonTab.classList.add('active');
+            xmlTab.classList.remove('active');
+            jsonOutput.style.display = 'block';
+            xmlOutput.style.display = 'none';
+        });
+        
+        xmlTab.addEventListener('click', () => {
+            xmlTab.classList.add('active');
+            jsonTab.classList.remove('active');
+            xmlOutput.style.display = 'block';
+            jsonOutput.style.display = 'none';
+        });
+        
+        // Clear results
+        clearButton.addEventListener('click', () => {
+            jsonOutput.textContent = '';
+            xmlOutput.textContent = '';
+            completeDataset = [];
+            downloadButton.disabled = true;
+        });
+        
+        // Handle tags
+        function initializeTagSystem() {
+            // Add initial sample tags
+            const sampleTags = ['Beginner', 'Intermediate', 'Advanced'];
+            sampleTags.forEach(tag => addTag(tag));
+            
+            // Add event listener for the add tag button
+            document.querySelector('.add-tag-btn').addEventListener('click', () => {
+                const input = document.querySelector('.tag-input');
+                const tagText = input.value.trim();
+                
+                if (tagText && !topicTags.includes(tagText)) {
+                    addTag(tagText);
+                    input.value = '';
+                }
+            });
+            
+            // Allow pressing Enter to add a tag
+            document.querySelector('.tag-input').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    const input = e.target;
+                    const tagText = input.value.trim();
+                    
+                    if (tagText && !topicTags.includes(tagText)) {
+                        addTag(tagText);
+                        input.value = '';
+                    }
+                    e.preventDefault();
+                }
+            });
+        }
+        
+        function addTag(tagText) {
+            // Add to internal array
+            topicTags.push(tagText);
+            
+            // Create visual representation
+            const tagElement = document.createElement('span');
+            tagElement.className = 'tag-pill';
+            tagElement.textContent = tagText;
+            
+            // Add remove button
+            const removeBtn = document.createElement('span');
+            removeBtn.className = 'remove-tag';
+            removeBtn.textContent = '×';
+            removeBtn.addEventListener('click', () => removeTag(tagText, tagElement));
+            
+            tagElement.appendChild(removeBtn);
+            tagsList.appendChild(tagElement);
+        }
+        
+        function removeTag(tagText, element) {
+            // Remove from internal array
+            topicTags = topicTags.filter(tag => tag !== tagText);
+            
+            // Remove visual element
+            element.remove();
+        }
+        
+        // Initialize tag system
+        initializeTagSystem();
+        
+        // Generate dataset
+        generateButton.addEventListener('click', async () => {
+            // Validate inputs
+            const apiEndpoint = apiEndpointInput.value.trim();
+            const apiKey = apiKeyInput.value.trim();
+            const modelName = modelNameInput.value.trim();
+            const topic = topicInput.value.trim();
+            const batchSize = parseInt(batchSizeInput.value);
+            const totalItems = parseInt(totalItemsInput.value);
+            
+            if (!apiEndpoint || !apiKey || !modelName || !topic) {
+                showStatus('Please fill in all required fields.', 'error');
+                return;
+            }
+            
+            if (isGenerating) {
+                return;
+            }
+            
+            // Start generation
+            isGenerating = true;
+            shouldStop = false;
+            completeDataset = [];
+            generateButton.disabled = true;
+            stopButton.disabled = false;
+            showStatus('Starting dataset generation...', 'success');
+            progressContainer.style.display = 'block';
+            updateProgress(0, totalItems);
+            
+            try {
+                const batches = Math.ceil(totalItems / batchSize);
+                let itemsGenerated = 0;
+                
+                for (let i = 0; i < batches; i++) {
+                    if (shouldStop) {
+                        showStatus('Generation stopped by user.', 'error');
+                        break;
+                    }
+                    
+                    const itemsInThisBatch = Math.min(batchSize, totalItems - itemsGenerated);
+                    batchInfoDiv.textContent = `Generating batch ${i + 1} of ${batches} (${itemsInThisBatch} items)`;
+                    
+                    const batchData = await generateBatch(
+                        apiEndpoint,
+                        apiKey,
+                        modelName,
+                        topic,
+                        itemsInThisBatch,
+                        parseFloat(temperatureInput.value),
+                        parseInt(maxTokensInput.value),
+                        systemPromptInput.value,
+                        promptTemplateInput.value
+                    );
+                    
+                    if (batchData && batchData.length > 0) {
+                        completeDataset = [...completeDataset, ...batchData];
+                        updateOutput();
+                        itemsGenerated += batchData.length;
+                        updateProgress(itemsGenerated, totalItems);
+                    }
+                    
+                    // Delay between batches
+                    if (i < batches - 1 && !shouldStop) {
+                        await new Promise(resolve => setTimeout(resolve, parseInt(requestDelayInput.value)));
+                    }
+                }
+                
+                if (!shouldStop) {
+                    showStatus(`Successfully generated ${completeDataset.length} items.`, 'success');
+                }
+                
+                downloadButton.disabled = false;
+            } catch (error) {
+                showStatus(`Error: ${error.message}`, 'error');
+                console.error(error);
+            } finally {
+                isGenerating = false;
+                generateButton.disabled = false;
+                stopButton.disabled = true;
+            }
+        });
+        
+        // Stop generation
+        stopButton.addEventListener('click', () => {
+            shouldStop = true;
+            stopButton.disabled = true;
+            showStatus('Stopping generation after current batch completes...', 'error');
+        });
+        
+        // Download dataset
+        downloadButton.addEventListener('click', () => {
+            if (completeDataset.length === 0) {
+                return;
+            }
+            
+            const format = dataFormatSelect.value;
+            let content, filename, type;
+            
+            if (format === 'json') {
+                content = JSON.stringify(completeDataset, null, 2);
+                filename = `dataset_${topicInput.value.replace(/\s+/g, '_').toLowerCase()}.json`;
+                type = 'application/json';
+            } else {
+                content = jsonToXml(completeDataset);
+                filename = `dataset_${topicInput.value.replace(/\s+/g, '_').toLowerCase()}.xml`;
+                type = 'application/xml';
+            }
+            
+            const blob = new Blob([content], { type });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
+        
+        // Generate a batch of items
+        async function generateBatch(apiEndpoint, apiKey, modelName, topic, count, temperature, maxTokens, systemPrompt, promptTemplate) {
+            const formattedPrompt = promptTemplate
+                .replace('{topic}', topic)
+                .replace('{count}', count)
+                .replace('{tags}', topicTags.join(', '));
+            
+            const requestBody = {
+                model: modelName,
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: formattedPrompt }
+                ],
+                temperature: temperature,
+                max_tokens: maxTokens
+            };
+            
+            try {
+                const response = await fetch(apiEndpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiKey}`
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(`API Error: ${errorData.error?.message || response.statusText}`);
+                }
+                
+                const data = await response.json();
+                const content = data.choices[0].message.content;
+                
+                // Extract JSON data from response
+                let jsonData;
+                try {
+                    // Check if content is already JSON or needs extraction
+                    if (content.trim().startsWith('{') || content.trim().startsWith('[')) {
+                        jsonData = JSON.parse(content);
+                    } else {
+                        // Extract JSON from markdown code blocks or text
+                        const jsonMatch = content.match(/```(?:json)?\s*(\[\s*\{.*?\}\s*\]|\{.*?\})\s*```/s) || 
+                                         content.match(/(\[\s*\{.*?\}\s*\]|\{.*?\})/s);
+                        if (jsonMatch && jsonMatch[1]) {
+                            jsonData = JSON.parse(jsonMatch[1]);
+                        } else {
+                            throw new Error("Could not extract JSON from response");
+                        }
+                    }
+                    
+                    // Handle if response is an object with data inside rather than an array
+                    if (!Array.isArray(jsonData)) {
+                        if (jsonData.data && Array.isArray(jsonData.data)) {
+                            jsonData = jsonData.data;
+                        } else {
+                            jsonData = [jsonData];
+                        }
+                    }
+                    
+                    return jsonData;
+                } catch (error) {
+                    console.error("JSON parsing error:", error);
+                    console.log("Raw content:", content);
+                    showStatus(`Error parsing response: ${error.message}. See console for details.`, 'error');
+                    return [];
+                }
+            } catch (error) {
+                showStatus(`API Error: ${error.message}`, 'error');
+                console.error("API error:", error);
+                return [];
+            }
+        }
+        
+        // Update the output display
+        function updateOutput() {
+            if (completeDataset.length === 0) {
+                jsonOutput.textContent = '';
+                xmlOutput.textContent = '';
+                return;
+            }
+            
+            // Update JSON output
+            jsonOutput.textContent = JSON.stringify(completeDataset, null, 2);
+            
+            // Update XML output
+            xmlOutput.textContent = jsonToXml(completeDataset);
+        }
+        
+        // Convert JSON to XML
+        function jsonToXml(json) {
+            const xml = ['<?xml version="1.0" encoding="UTF-8"?>', '<dataset>'];
+            
+            for (const item of json) {
+                xml.push('  <item>');
+                for (const [key, value] of Object.entries(item)) {
+                    const escapedValue = String(value)
+                        .replace(/&/g, '&amp;')
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;')
+                        .replace(/"/g, '&quot;')
+                        .replace(/'/g, '&apos;');
+                    xml.push(`    <${key}>${escapedValue}</${key}>`);
+                }
+                xml.push('  </item>');
+            }
+            
+            xml.push('</dataset>');
+            return xml.join('\n');
+        }
+        
+        // Show status message
+        function showStatus(message, type) {
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+        }
+        
+        // Update progress bar
+        function updateProgress(current, total) {
+            const percentage = Math.min(100, Math.round((current / total) * 100));
+            progressBar.style.width = `${percentage}%`;
+            progressBar.textContent = `${percentage}%`;
+        }
+    </script>
+</body>
+</html>
