@@ -10,9 +10,7 @@ UI / UX Rework with Bootstrap to adapt to different screens better.
 - API Connection test
 - Visual tracking for batch processing
 - Contextual Help added
-
-
-![image](https://github.com/user-attachments/assets/0a6b33dd-6b41-4556-888b-6fedb02ab2d7)
+-------------------------------------------------------------------
 
 I wanted to use LLMs to create some training data. I built this tool to streamline that process and thought it might be useful to other folks too. Single HTML file with embedded JavaScript will query an Open AI API compatible LLM and create question answer pairs on a topic of your choice. Fork it and make it better! :)
 
