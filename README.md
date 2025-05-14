@@ -3,13 +3,13 @@ LLM-Powered Dataset Creation Tool
 v2!
 ![image](https://github.com/user-attachments/assets/c6b8cf0f-8efd-46e8-9fae-6b6212a1ca2c)
 UI / UX Rework with Bootstrap to adapt to different screens better.
-Dark/Light Mode toggle
-Better Input validation
-Better error messaging and visual feedback
-Ability to save/load different configs
-API Connection test
-Visual tracking for batch processing
-Contextual Help added
+- Dark/Light Mode toggle
+- Better Input validation
+- Better error messaging and visual feedback
+- Ability to save/load different configs
+- API Connection test
+- Visual tracking for batch processing
+- Contextual Help added
 
 
 ![image](https://github.com/user-attachments/assets/0a6b33dd-6b41-4556-888b-6fedb02ab2d7)
