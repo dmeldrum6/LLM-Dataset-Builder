@@ -979,32 +979,35 @@ Format the response as valid {{format}} with "problem", "examples", "solution", 
         
         // Templates
         function initializePromptTemplates() {
-            const templates = {
-                'qa': `Generate a {{tags}} level question and answer pair about {{topic}}. 
-The question should be challenging but clear.
-The answer should be comprehensive and accurate.
+			const templates = {
+				'qa': `Generate a {{tags}} level question and answer pair about {{topic}}. 
+		The question should be challenging but clear.
+		The answer should be comprehensive and accurate.
 
-Format the response as valid {{format}} with "question" and "answer" fields.`,
-                'multiple-choice': `Create a {{tags}} level multiple-choice question about {{topic}}.
-Include 4 options (A, B, C, D) with only one correct answer.
-Explain why the correct answer is right and why the others are wrong.
+		Return the response as a JSON object with "question" and "answer" fields.`,
+				
+				'multiple-choice': `Create a {{tags}} level multiple-choice question about {{topic}}.
+		Include 4 options (A, B, C, D) with only one correct answer.
+		Explain why the correct answer is right and why the others are wrong.
 
-Format the response as valid {{format}} with "question", "options", "correctAnswer", and "explanation" fields.`,
-                'code': `Generate a {{tags}} level coding problem related to {{topic}}.
-Include a problem description, example input/output, and a solution with comments.
+		Return the response as a JSON object with "question", "options", "correctAnswer", and "explanation" fields.`,
+				
+				'code': `Generate a {{tags}} level coding problem related to {{topic}}.
+		Include a problem description, example input/output, and a solution with comments.
 
-Format the response as valid {{format}} with "problem", "examples", "solution", and "explanation" fields.`,
-                'reasoning': `Create a {{tags}} level problem about {{topic}} that requires step-by-step reasoning.
-Include the problem, the step-by-step solution process, and the final answer.
+		Return the response as a JSON object with "problem", "examples", "solution", and "explanation" fields.`,
+				
+				'reasoning': `Create a {{tags}} level problem about {{topic}} that requires step-by-step reasoning.
+		Include the problem, the step-by-step solution process, and the final answer.
 
-Format the response as valid {{format}} with "problem", "reasoning", and "answer" fields.`
-            };
-            
-            window.promptTemplates = templates;
-            
-            // Set default template
-            document.getElementById('promptTemplate').value = templates['qa'];
-        }
+		Return the response as a JSON object with "problem", "reasoning", and "answer" fields.`
+			};
+			
+			window.promptTemplates = templates;
+			
+			// Set default template
+			document.getElementById('promptTemplate').value = templates['qa'];
+		}
         
         function getTemplateByName(name) {
             return window.promptTemplates[name] || '';
@@ -1267,175 +1270,306 @@ Format the response as valid {{format}} with "problem", "reasoning", and "answer
         }
         
         async function generateDataset() {
-            const totalItems = parseInt(document.getElementById('totalItems').value);
-            const batchSize = parseInt(document.getElementById('batchSize').value);
-            const requestDelay = parseInt(document.getElementById('requestDelay').value);
-            const retryAttempts = parseInt(document.getElementById('retryAttempts').value);
-            const outputFormat = document.getElementById('outputFormat').value;
-            
-            const startIndex = currentResults.length;
-            const endIndex = Math.min(totalItems, startIndex + batchSize);
-            
-            if (startIndex >= totalItems) {
-                finishGeneration();
-                return;
-            }
-            
-            // Update progress
-            const progress = Math.round((startIndex / totalItems) * 100);
-            document.getElementById('progressBar').style.width = `${progress}%`;
-            document.getElementById('progressBar').textContent = `${progress}%`;
-            document.getElementById('progressStatus').textContent = `Generating items ${startIndex + 1} to ${endIndex} of ${totalItems}...`;
-            
-            try {
-                const batchResults = await generateBatch(startIndex, endIndex);
-                
-                if (batchResults.length > 0) {
-                    // Add batch results to current results
-                    currentResults = [...currentResults, ...batchResults];
-                    
-                    // Display results
-                    displayResults(currentResults, outputFormat);
-                    
-                    // Enable download and copy buttons
-                    document.getElementById('downloadBtn').disabled = false;
-                    document.getElementById('copyBtn').disabled = false;
-                    document.getElementById('clearBtn').disabled = false;
-                }
-                
-                // Continue with next batch if not stopped
-                if (!generationStopped) {
-                    if (endIndex < totalItems) {
-                        // Add delay between batches
-                        setTimeout(() => {
-                            generateDataset();
-                        }, requestDelay);
-                    } else {
-                        finishGeneration();
-                    }
-                } else {
-                    // Enable resume
-                    document.getElementById('generateBtn').disabled = false;
-                    document.getElementById('resetBtn').disabled = false;
-                    generationInProgress = false;
-                }
-            } catch (error) {
-                alert(`Error during generation: ${error.message}`);
-                document.getElementById('progressStatus').textContent = `Error: ${error.message}`;
-                document.getElementById('generateBtn').disabled = false;
-                document.getElementById('stopBtn').disabled = true;
-                document.getElementById('resetBtn').disabled = false;
-                generationInProgress = false;
-            }
-        }
+			const totalItems = parseInt(document.getElementById('totalItems').value);
+			const batchSize = parseInt(document.getElementById('batchSize').value);
+			const requestDelay = parseInt(document.getElementById('requestDelay').value);
+			const outputFormat = document.getElementById('outputFormat').value;
+			
+			const startIndex = currentResults.length;
+			
+			if (startIndex >= totalItems) {
+				finishGeneration();
+				return;
+			}
+			
+			// Calculate items to generate in this round
+			const remainingItems = totalItems - startIndex;
+			const itemsThisRound = Math.min(batchSize, remainingItems);
+			const endIndex = startIndex + itemsThisRound;
+			
+			// Update progress
+			const progress = Math.round((startIndex / totalItems) * 100);
+			document.getElementById('progressBar').style.width = `${progress}%`;
+			document.getElementById('progressBar').textContent = `${progress}%`;
+			document.getElementById('progressStatus').textContent = `Generating items ${startIndex + 1} to ${endIndex} of ${totalItems}...`;
+			
+			try {
+				const batchResults = await generateBatch(startIndex, endIndex);
+				
+				if (batchResults.length > 0) {
+					// Add batch results to current results
+					currentResults = [...currentResults, ...batchResults];
+					
+					// Display results
+					displayResults(currentResults, outputFormat);
+					
+					// Enable download and copy buttons
+					document.getElementById('downloadBtn').disabled = false;
+					document.getElementById('copyBtn').disabled = false;
+					document.getElementById('clearBtn').disabled = false;
+				}
+				
+				// Continue with next batch if not stopped
+				if (!generationStopped && endIndex < totalItems) {
+					// Reduced delay since we're doing batch processing
+					const adjustedDelay = Math.max(requestDelay / 2, 100); // Minimum 100ms delay
+					setTimeout(() => {
+						generateDataset();
+					}, adjustedDelay);
+				} else if (endIndex >= totalItems) {
+					finishGeneration();
+				} else {
+					// Generation was stopped
+					document.getElementById('generateBtn').disabled = false;
+					document.getElementById('resetBtn').disabled = false;
+					generationInProgress = false;
+				}
+			} catch (error) {
+				alert(`Error during generation: ${error.message}`);
+				document.getElementById('progressStatus').textContent = `Error: ${error.message}`;
+				document.getElementById('generateBtn').disabled = false;
+				document.getElementById('stopBtn').disabled = true;
+				document.getElementById('resetBtn').disabled = false;
+				generationInProgress = false;
+			}
+		}
         
         async function generateBatch(startIndex, endIndex) {
-            const results = [];
-            const endpoint = document.getElementById('endpoint').value;
-            const apiKey = document.getElementById('apiKey').value;
-            const model = document.getElementById('model').value;
-            const topic = document.getElementById('topic').value;
-            const promptTemplate = document.getElementById('promptTemplate').value;
-            const systemPrompt = document.getElementById('systemPrompt').value;
-            const temperature = parseFloat(document.getElementById('temperature').value);
-            const maxTokens = parseInt(document.getElementById('maxTokens').value);
-            const outputFormat = document.getElementById('outputFormat').value;
-            const validateOutput = document.getElementById('validateOutput').checked;
-            
-            // Get tags
-            const tags = Array.from(document.getElementById('tagsContainer').children).map(tag => 
-                tag.textContent.trim().replace('×', '').trim()
-            );
-            
-            // Process each item in the batch
-            for (let i = startIndex; i < endIndex && !generationStopped; i++) {
-                // Prepare prompt with placeholders replaced
-                let selectedTag = tags[i % tags.length]; // Distribute tags evenly
-                
-                let prompt = promptTemplate
-                    .replace(/{{topic}}/g, topic)
-                    .replace(/{{tags}}/g, selectedTag)
-                    .replace(/{{format}}/g, outputFormat)
-                    .replace(/{{index}}/g, (i + 1).toString());
-                
-                try {
-                    // Make API request
-                    const itemResult = await makeApiRequest(endpoint, apiKey, model, systemPrompt, prompt, temperature, maxTokens);
-                    
-                    if (validateOutput) {
-                        // Validate output format
-                        const validatedResult = validateOutputFormat(itemResult, outputFormat);
-                        if (validatedResult) {
-                            results.push({
-                                ...validatedResult,
-                                _meta: {
-                                    index: i + 1,
-                                    tag: selectedTag
-                                }
-                            });
-                        }
-                    } else {
-                        results.push({
-                            ...itemResult,
-                            _meta: {
-                                index: i + 1,
-                                tag: selectedTag
-                            }
-                        });
-                    }
-                    
-                    // Update item progress
-                    const itemProgress = Math.round(((i - startIndex + 1) / (endIndex - startIndex)) * 100);
-                    document.getElementById('progressStatus').textContent = `Batch progress: ${itemProgress}% (Item ${i + 1} of ${endIndex})`;
-                } catch (error) {
-                    console.error(`Error generating item ${i + 1}:`, error);
-                }
-            }
-            
-            return results;
-        }
+			const batchSize = endIndex - startIndex;
+			const endpoint = document.getElementById('endpoint').value;
+			const apiKey = document.getElementById('apiKey').value;
+			const model = document.getElementById('model').value;
+			const topic = document.getElementById('topic').value;
+			const promptTemplate = document.getElementById('promptTemplate').value;
+			const systemPrompt = document.getElementById('systemPrompt').value;
+			const temperature = parseFloat(document.getElementById('temperature').value);
+			const maxTokens = parseInt(document.getElementById('maxTokens').value);
+			const outputFormat = document.getElementById('outputFormat').value;
+			const validateOutput = document.getElementById('validateOutput').checked;
+			
+			// Get tags
+			const tags = Array.from(document.getElementById('tagsContainer').children).map(tag => 
+				tag.textContent.trim().replace('×', '').trim()
+			);
+			
+			// Create prompt that requests multiple items at once
+			const itemsToGenerate = Math.min(batchSize, 10); // Generate up to 10 items per request
+			let selectedTag = tags[(startIndex) % tags.length];
+			
+			// Modified prompt template for batch generation
+			let batchPrompt = promptTemplate
+				.replace(/{{topic}}/g, topic)
+				.replace(/{{tags}}/g, selectedTag)
+				.replace(/{{format}}/g, outputFormat)
+				.replace(/{{index}}/g, `${startIndex + 1}-${startIndex + itemsToGenerate}`);
+			
+			// Add instruction for multiple items
+			batchPrompt += `\n\nGenerate exactly ${itemsToGenerate} different items. Return them as a JSON array where each item follows the specified format above.`;
+			
+			try {
+				// Make single API request for multiple items
+				const response = await makeApiRequest(endpoint, apiKey, model, systemPrompt, batchPrompt, temperature, maxTokens * itemsToGenerate);
+				
+				// Parse the response to extract multiple items
+				const parsedItems = parseBatchResponse(response.content, outputFormat, itemsToGenerate);
+				
+				// Add metadata to each item
+				const results = parsedItems.map((item, index) => ({
+					...item,
+					_meta: {
+						index: startIndex + index + 1,
+						tag: selectedTag
+					}
+				}));
+				
+				return results;
+				
+			} catch (error) {
+				console.error(`Error generating batch ${startIndex}-${endIndex}:`, error);
+				
+				// Fallback to individual generation if batch fails
+				return await generateIndividualItems(startIndex, endIndex);
+			}
+		}
         
+		function parseBatchResponse(content, format, expectedCount) {
+			try {
+				// Remove code block markers if present
+				let cleanContent = content.replace(/```(?:json|xml)?\s*([\s\S]*?)```/g, '$1').trim();
+				
+				// Try to parse as JSON array first
+				let parsed;
+				try {
+					parsed = JSON.parse(cleanContent);
+				} catch (e) {
+					// If direct parsing fails, try to extract JSON array from text
+					const jsonMatch = cleanContent.match(/\[([\s\S]*)\]/);
+					if (jsonMatch) {
+						parsed = JSON.parse(jsonMatch[0]);
+					} else {
+						throw new Error('No valid JSON array found');
+					}
+				}
+				
+				// Ensure we have an array
+				if (!Array.isArray(parsed)) {
+					parsed = [parsed];
+				}
+				
+				// Limit to expected count
+				return parsed.slice(0, expectedCount).map(item => ({
+					content: typeof item === 'string' ? item : item,
+					format: format
+				}));
+				
+			} catch (error) {
+				console.warn('Failed to parse batch response, falling back to single item:', error);
+				
+				// Fallback: treat entire response as single item
+				return [{
+					content: content,
+					format: format
+				}];
+			}
+		}
+		
+		// Fallback function for individual generation
+		async function generateIndividualItems(startIndex, endIndex) {
+			const results = [];
+			const endpoint = document.getElementById('endpoint').value;
+			const apiKey = document.getElementById('apiKey').value;
+			const model = document.getElementById('model').value;
+			const topic = document.getElementById('topic').value;
+			const promptTemplate = document.getElementById('promptTemplate').value;
+			const systemPrompt = document.getElementById('systemPrompt').value;
+			const temperature = parseFloat(document.getElementById('temperature').value);
+			const maxTokens = parseInt(document.getElementById('maxTokens').value);
+			const outputFormat = document.getElementById('outputFormat').value;
+			
+			const tags = Array.from(document.getElementById('tagsContainer').children).map(tag => 
+				tag.textContent.trim().replace('×', '').trim()
+			);
+			
+			// Create array of promises for parallel generation
+			const promises = [];
+			
+			for (let i = startIndex; i < endIndex && !generationStopped; i++) {
+				let selectedTag = tags[i % tags.length];
+				
+				let prompt = promptTemplate
+					.replace(/{{topic}}/g, topic)
+					.replace(/{{tags}}/g, selectedTag)
+					.replace(/{{format}}/g, outputFormat)
+					.replace(/{{index}}/g, (i + 1).toString());
+				
+				promises.push(
+					makeApiRequest(endpoint, apiKey, model, systemPrompt, prompt, temperature, maxTokens)
+						.then(result => ({
+							...result,
+							_meta: {
+								index: i + 1,
+								tag: selectedTag
+							}
+						}))
+						.catch(error => {
+							console.error(`Error generating item ${i + 1}:`, error);
+							return null;
+						})
+				);
+			}
+			
+			// Execute all requests in parallel with controlled concurrency
+			const concurrentResults = await executeWithConcurrency(promises, 5); // Max 5 concurrent requests
+			
+			// Filter out null results (failed requests)
+			return concurrentResults.filter(result => result !== null);
+		}
+
+		// Helper function to control concurrency
+		async function executeWithConcurrency(promises, maxConcurrency) {
+			const results = [];
+			
+			for (let i = 0; i < promises.length; i += maxConcurrency) {
+				const batch = promises.slice(i, i + maxConcurrency);
+				const batchResults = await Promise.allSettled(batch);
+				
+				batchResults.forEach(result => {
+					if (result.status === 'fulfilled') {
+						results.push(result.value);
+					} else {
+						console.error('Promise rejected:', result.reason);
+						results.push(null);
+					}
+				});
+				
+				// Update progress
+				const progress = Math.round(((i + batch.length) / promises.length) * 100);
+				document.getElementById('progressStatus').textContent = 
+					`Processing batch: ${progress}% (${i + batch.length}/${promises.length} items)`;
+				
+				// Add small delay between batches to avoid rate limiting
+				if (i + maxConcurrency < promises.length && !generationStopped) {
+					const delay = parseInt(document.getElementById('requestDelay').value) || 500;
+					await new Promise(resolve => setTimeout(resolve, delay));
+				}
+			}
+			
+			return results;
+		}
+
         async function makeApiRequest(endpoint, apiKey, model, systemPrompt, prompt, temperature, maxTokens, attempts = 0, maxAttempts = 3) {
-            try {
-                const response = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${apiKey}`
-                    },
-                    body: JSON.stringify({
-                        model: model,
-                        messages: [
-                            {role: "system", content: systemPrompt},
-                            {role: "user", content: prompt}
-                        ],
-                        temperature: temperature,
-                        max_tokens: maxTokens
-                    })
-                });
-                
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error?.message || response.statusText);
-                }
-                
-                const data = await response.json();
-                
-                // Extract and return content
-                return {
-                    content: data.choices[0].message.content,
-                    // Add any model-specific fields
-                    model_name: model
-                };
-            } catch (error) {
-                if (attempts < maxAttempts) {
-                    console.warn(`Request failed (attempt ${attempts + 1}), retrying...`);
-                    await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds before retry
-                    return makeApiRequest(endpoint, apiKey, model, systemPrompt, prompt, temperature, maxTokens, attempts + 1, maxAttempts);
-                }
-                throw error;
-            }
-        }
+			try {
+				const response = await fetch(endpoint, {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+						'Authorization': `Bearer ${apiKey}`
+					},
+					body: JSON.stringify({
+						model: model,
+						messages: [
+							{role: "system", content: systemPrompt},
+							{role: "user", content: prompt}
+						],
+						temperature: temperature,
+						max_tokens: maxTokens
+					})
+				});
+				
+				if (!response.ok) {
+					const errorData = await response.json();
+					
+					// Handle rate limiting specifically
+					if (response.status === 429) {
+						const retryAfter = response.headers.get('retry-after') || '5';
+						const waitTime = parseInt(retryAfter) * 1000;
+						
+						if (attempts < maxAttempts) {
+							console.warn(`Rate limited, waiting ${waitTime}ms before retry...`);
+							await new Promise(resolve => setTimeout(resolve, waitTime));
+							return makeApiRequest(endpoint, apiKey, model, systemPrompt, prompt, temperature, maxTokens, attempts + 1, maxAttempts);
+						}
+					}
+					
+					throw new Error(errorData.error?.message || response.statusText);
+				}
+				
+				const data = await response.json();
+				
+				return {
+					content: data.choices[0].message.content,
+					model_name: model
+				};
+			} catch (error) {
+				if (attempts < maxAttempts && error.name !== 'AbortError') {
+					const backoffDelay = Math.min(1000 * Math.pow(2, attempts), 10000); // Exponential backoff, max 10s
+					console.warn(`Request failed (attempt ${attempts + 1}), retrying in ${backoffDelay}ms...`);
+					await new Promise(resolve => setTimeout(resolve, backoffDelay));
+					return makeApiRequest(endpoint, apiKey, model, systemPrompt, prompt, temperature, maxTokens, attempts + 1, maxAttempts);
+				}
+				throw error;
+			}
+		}
         
         function validateOutputFormat(result, format) {
             try {
