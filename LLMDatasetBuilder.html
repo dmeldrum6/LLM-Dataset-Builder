@@ -1334,6 +1334,38 @@ Format the response as valid {{format}} with "problem", "examples", "solution", 
 			}
 		}
         
+		function getOptimalBatchSize(model, maxTokens) {
+			// Model-specific optimal batch sizes for diversity vs speed
+			const modelOptimizations = {
+				'gpt-4': { maxBatch: 8, reason: 'High quality, handles medium batches well' },
+				'gpt-4o': { maxBatch: 10, reason: 'Optimized for larger contexts' },
+				'gpt-3.5-turbo': { maxBatch: 6, reason: 'Best with smaller batches for consistency' },
+				'claude-3-opus': { maxBatch: 12, reason: 'Excellent context handling' },
+				'claude-3-sonnet': { maxBatch: 8, reason: 'Good balance of speed and quality' },
+				'llama': { maxBatch: 5, reason: 'Conservative for open source models' },
+				'mistral': { maxBatch: 6, reason: 'Good with moderate batches' }
+			};
+			
+			// Find best match for model name
+			let optimalSize = 7; // Default
+			
+			for (const [modelKey, config] of Object.entries(modelOptimizations)) {
+				if (model.toLowerCase().includes(modelKey.toLowerCase())) {
+					optimalSize = config.maxBatch;
+					break;
+				}
+			}
+			
+			// Adjust based on token limit
+			if (maxTokens > 4000) {
+				optimalSize = Math.min(optimalSize + 3, 15);
+			} else if (maxTokens < 1000) {
+				optimalSize = Math.max(optimalSize - 2, 3);
+			}
+			
+			return optimalSize;
+		}
+
         async function generateBatch(startIndex, endIndex) {
 			const batchSize = endIndex - startIndex;
 			const endpoint = document.getElementById('endpoint').value;
@@ -1346,39 +1378,92 @@ Format the response as valid {{format}} with "problem", "examples", "solution", 
 			const maxTokens = parseInt(document.getElementById('maxTokens').value);
 			const outputFormat = document.getElementById('outputFormat').value;
 			const validateOutput = document.getElementById('validateOutput').checked;
+			const balancedDistribution = document.getElementById('balancedDistribution').checked;
+			
+			// Track batch parsing failures globally
+			if (!window.batchFailureCount) window.batchFailureCount = 0;
+			if (!window.consecutiveFailures) window.consecutiveFailures = 0;
 			
 			// Get tags
 			const tags = Array.from(document.getElementById('tagsContainer').children).map(tag => 
 				tag.textContent.trim().replace('×', '').trim()
 			);
 			
-			// Create prompt that requests multiple items at once
-			const itemsToGenerate = Math.min(batchSize, 10); // Generate up to 10 items per request
-			let selectedTag = tags[(startIndex) % tags.length];
+			// If we've had too many consecutive batch failures, fall back to individual generation
+			if (window.consecutiveFailures >= 3) {
+				console.warn(`Too many batch parsing failures (${window.consecutiveFailures}), falling back to individual generation`);
+				return await generateIndividualItems(startIndex, endIndex);
+			}
 			
-			// Modified prompt template for batch generation
+			// Dynamic batch sizing for optimal diversity vs speed
+			const optimalBatchSize = Math.min(batchSize, getOptimalBatchSize(model, maxTokens));
+			const itemsToGenerate = optimalBatchSize;
+			
+			// Create tag distribution for this batch
+			let tagDistribution = [];
+			for (let i = 0; i < itemsToGenerate; i++) {
+				const tagIndex = balancedDistribution ? 
+					(startIndex + i) % tags.length : 
+					Math.floor(Math.random() * tags.length);
+				tagDistribution.push(tags[tagIndex] || tags[0]);
+			}
+			
+			// Enhanced prompt with diversity instructions and JSON formatting emphasis
 			let batchPrompt = promptTemplate
 				.replace(/{{topic}}/g, topic)
-				.replace(/{{tags}}/g, selectedTag)
 				.replace(/{{format}}/g, outputFormat)
 				.replace(/{{index}}/g, `${startIndex + 1}-${startIndex + itemsToGenerate}`);
 			
-			// Add instruction for multiple items
-			batchPrompt += `\n\nGenerate exactly ${itemsToGenerate} different items. Return them as a JSON array where each item follows the specified format above.`;
+			// Replace {{tags}} with specific instructions for varied difficulty
+			if (batchPrompt.includes('{{tags}}')) {
+				const tagInstructions = `Generate items with these difficulty levels in order: ${tagDistribution.join(', ')}`;
+				batchPrompt = batchPrompt.replace(/{{tags}}/g, tagInstructions);
+			}
+			
+			// Add diversity-focused instructions with explicit JSON formatting requirements
+			const diversityPrompt = `\n\nIMPORTANT: Generate exactly ${itemsToGenerate} COMPLETELY DIFFERENT items about ${topic}. 
+		Each item should:
+		- Have a different difficulty level as specified: ${tagDistribution.join(', ')}
+		- Cover different aspects, concepts, or subtopics within ${topic}
+		- Use varied question types, formats, and approaches
+		- Avoid repetition in themes, examples, or phrasing
+		- Be unique and distinct from each other
+
+		CRITICAL: Return ONLY valid JSON array format. Do NOT include any escape characters like \\n, \\t, or \\r in strings. Use only standard JSON-safe characters. Ensure all quotes are properly escaped as \\" and no control characters are present.
+
+		Return as a valid JSON array: [{"question": "...", "answer": "..."}, {"question": "...", "answer": "..."}]`;
+			
+			batchPrompt += diversityPrompt;
 			
 			try {
+				// Use higher temperature for more diversity in batch generation
+				const diversityTemperature = Math.min(temperature + 0.2, 1.5);
+				
 				// Make single API request for multiple items
-				const response = await makeApiRequest(endpoint, apiKey, model, systemPrompt, batchPrompt, temperature, maxTokens * itemsToGenerate);
+				const response = await makeApiRequest(endpoint, apiKey, model, systemPrompt, batchPrompt, diversityTemperature, maxTokens * itemsToGenerate);
 				
 				// Parse the response to extract multiple items
 				const parsedItems = parseBatchResponse(response.content, outputFormat, itemsToGenerate);
 				
-				// Add metadata to each item
+				// Check if parsing was successful
+				if (parsedItems.length === 1 && parsedItems[0].content === response.content) {
+					// This indicates parsing failed and we got the raw content back
+					window.batchFailureCount++;
+					window.consecutiveFailures++;
+					console.warn(`Batch parsing failed (#${window.batchFailureCount}), falling back to individual generation for this batch`);
+					return await generateIndividualItems(startIndex, endIndex);
+				} else {
+					// Parsing succeeded, reset consecutive failures
+					window.consecutiveFailures = 0;
+				}
+				
+				// Add metadata to each item with correct tag distribution
 				const results = parsedItems.map((item, index) => ({
 					...item,
 					_meta: {
 						index: startIndex + index + 1,
-						tag: selectedTag
+						tag: tagDistribution[index] || tagDistribution[0],
+						batchId: `batch_${startIndex}_${Date.now()}` // For deduplication tracking
 					}
 				}));
 				
@@ -1386,6 +1471,8 @@ Format the response as valid {{format}} with "problem", "examples", "solution", 
 				
 			} catch (error) {
 				console.error(`Error generating batch ${startIndex}-${endIndex}:`, error);
+				window.batchFailureCount++;
+				window.consecutiveFailures++;
 				
 				// Fallback to individual generation if batch fails
 				return await generateIndividualItems(startIndex, endIndex);
@@ -1401,29 +1488,80 @@ Format the response as valid {{format}} with "problem", "examples", "solution", 
 				let parsed;
 				try {
 					parsed = JSON.parse(cleanContent);
-				} catch (e) {
-					// If direct parsing fails, try to extract JSON array from text
-					const jsonMatch = cleanContent.match(/\[([\s\S]*)\]/);
-					if (jsonMatch) {
-						parsed = JSON.parse(jsonMatch[0]);
-					} else {
-						throw new Error('No valid JSON array found');
+				} catch (parseError) {
+					console.warn('Initial JSON parse failed:', parseError.message);
+					
+					// Try to extract and repair JSON
+					parsed = attemptJsonRepair(cleanContent, parseError);
+					
+					if (!parsed) {
+						// If repair failed, try to extract just the JSON array part
+						const jsonMatch = cleanContent.match(/\[([\s\S]*)\]/);
+						if (jsonMatch) {
+							try {
+								parsed = JSON.parse(jsonMatch[0]);
+							} catch (e) {
+								// Try repairing the extracted JSON
+								parsed = attemptJsonRepair(jsonMatch[0], e);
+							}
+						}
+						
+						if (!parsed) {
+							// Last resort: treat as single item
+							console.warn('All JSON parsing attempts failed, treating as single item');
+							return [{
+								content: cleanContent,
+								format: format
+							}];
+						}
 					}
 				}
 				
-				// Ensure we have an array
+				// CRITICAL FIX: Ensure we have an array and it's not a string being treated as array
 				if (!Array.isArray(parsed)) {
+					// If it's a single object, wrap it in an array
 					parsed = [parsed];
+				} else if (parsed.length > 0 && typeof parsed[0] === 'string' && parsed[0].length === 1) {
+					// DETECTED: String was split into character array - rejoin it
+					const rejoined = parsed.join('');
+					console.warn('Detected character array, rejoining:', rejoined.substring(0, 100) + '...');
+					
+					// Try to parse the rejoined string as JSON
+					try {
+						const reparsed = JSON.parse(rejoined);
+						parsed = Array.isArray(reparsed) ? reparsed : [reparsed];
+					} catch (e) {
+						// If still can't parse, treat as single text item
+						parsed = [{
+							content: rejoined,
+							format: format
+						}];
+					}
 				}
 				
-				// Limit to expected count
-				return parsed.slice(0, expectedCount).map(item => ({
-					content: typeof item === 'string' ? item : item,
-					format: format
-				}));
+				// Limit to expected count and ensure proper structure
+				return parsed.slice(0, expectedCount).map(item => {
+					if (typeof item === 'string') {
+						return {
+							content: item,
+							format: format
+						};
+					} else if (typeof item === 'object' && item !== null) {
+						return {
+							content: item,
+							format: format
+						};
+					} else {
+						return {
+							content: String(item),
+							format: format
+						};
+					}
+				});
 				
 			} catch (error) {
-				console.warn('Failed to parse batch response, falling back to single item:', error);
+				console.error('Error in parseBatchResponse:', error);
+				console.error('Original content:', content.substring(0, 500) + '...');
 				
 				// Fallback: treat entire response as single item
 				return [{
@@ -1431,6 +1569,95 @@ Format the response as valid {{format}} with "problem", "examples", "solution", 
 					format: format
 				}];
 			}
+		}
+
+		// Helper function to attempt JSON repair
+		function attemptJsonRepair(jsonString, originalError) {
+			try {
+				// Common JSON repair strategies
+				let repairedJson = jsonString;
+				
+				// Strategy 1: Fix common quote issues
+				repairedJson = repairedJson
+					.replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":') // Add quotes to property names
+					.replace(/:\s*'([^']*)'/g, ': "$1"') // Replace single quotes with double quotes
+					.replace(/\\'/g, "'") // Fix escaped single quotes
+					.replace(/([^\\])"/g, '$1\\"') // Escape unescaped quotes in values
+					.replace(/\\"/g, '"'); // Then fix the property quotes we just broke
+				
+				// Strategy 2: Try to fix trailing commas
+				repairedJson = repairedJson.replace(/,(\s*[}\]])/g, '$1');
+				
+				// Strategy 3: Try to fix missing commas between objects
+				repairedJson = repairedJson.replace(/}(\s*){/g, '},$1{');
+				
+				// Strategy 4: Fix unclosed strings (basic attempt)
+				repairedJson = repairedJson.replace(/"([^"]*?)$/gm, '"$1"');
+				
+				// Try parsing the repaired JSON
+				const parsed = JSON.parse(repairedJson);
+				console.log('Successfully repaired JSON');
+				return parsed;
+				
+			} catch (repairError) {
+				console.warn('JSON repair attempt failed:', repairError.message);
+				
+				// Strategy 5: Try to extract complete objects manually
+				return extractValidJsonObjects(jsonString);
+			}
+		}
+
+		// Extract valid JSON objects from malformed JSON
+		function extractValidJsonObjects(jsonString) {
+			const objects = [];
+			let braceCount = 0;
+			let currentObject = '';
+			let inString = false;
+			let escapeNext = false;
+			
+			for (let i = 0; i < jsonString.length; i++) {
+				const char = jsonString[i];
+				currentObject += char;
+				
+				if (escapeNext) {
+					escapeNext = false;
+					continue;
+				}
+				
+				if (char === '\\') {
+					escapeNext = true;
+					continue;
+				}
+				
+				if (char === '"') {
+					inString = !inString;
+					continue;
+				}
+				
+				if (inString) continue;
+				
+				if (char === '{') {
+					braceCount++;
+				} else if (char === '}') {
+					braceCount--;
+					
+					if (braceCount === 0 && currentObject.trim().startsWith('{')) {
+						// We have a complete object
+						try {
+							const parsed = JSON.parse(currentObject.trim());
+							objects.push(parsed);
+							currentObject = '';
+						} catch (e) {
+							// This object is still malformed, skip it
+							console.warn('Skipping malformed object:', currentObject.substring(0, 100));
+							currentObject = '';
+						}
+					}
+				}
+			}
+			
+			console.log(`Extracted ${objects.length} valid objects from malformed JSON`);
+			return objects.length > 0 ? objects : null;
 		}
 		
 		// Fallback function for individual generation
@@ -1445,6 +1672,7 @@ Format the response as valid {{format}} with "problem", "examples", "solution", 
 			const temperature = parseFloat(document.getElementById('temperature').value);
 			const maxTokens = parseInt(document.getElementById('maxTokens').value);
 			const outputFormat = document.getElementById('outputFormat').value;
+			const balancedDistribution = document.getElementById('balancedDistribution').checked;
 			
 			const tags = Array.from(document.getElementById('tagsContainer').children).map(tag => 
 				tag.textContent.trim().replace('×', '').trim()
@@ -1454,7 +1682,11 @@ Format the response as valid {{format}} with "problem", "examples", "solution", 
 			const promises = [];
 			
 			for (let i = startIndex; i < endIndex && !generationStopped; i++) {
-				let selectedTag = tags[i % tags.length];
+				// Proper tag distribution
+				const tagIndex = balancedDistribution ? 
+					i % tags.length : 
+					Math.floor(Math.random() * tags.length);
+				let selectedTag = tags[tagIndex] || tags[0];
 				
 				let prompt = promptTemplate
 					.replace(/{{topic}}/g, topic)
@@ -1617,72 +1849,140 @@ Format the response as valid {{format}} with "problem", "examples", "solution", 
             }
         }
         
+		// Enhanced deduplication function
+		function deduplicateResults(results) {
+			if (!document.getElementById('deduplicateResults').checked) {
+				return results;
+			}
+			
+			const seen = new Set();
+			const deduplicated = [];
+			
+			for (const item of results) {
+				// Create a normalized version for comparison
+				let content = '';
+				
+				if (typeof item.content === 'string') {
+					content = item.content.toLowerCase().trim();
+				} else if (typeof item.content === 'object') {
+					// For structured content, check question/problem fields
+					const question = item.content.question || item.content.problem || '';
+					content = question.toLowerCase().trim();
+				}
+				
+				// Remove common variations that might cause false duplicates
+				content = content
+					.replace(/\s+/g, ' ') // Normalize whitespace
+					.replace(/[^\w\s]/g, '') // Remove punctuation
+					.substring(0, 100); // Compare first 100 chars
+				
+				if (!seen.has(content) && content.length > 10) {
+					seen.add(content);
+					deduplicated.push(item);
+				} else {
+					console.log('Duplicate detected and removed:', content.substring(0, 50) + '...');
+				}
+			}
+			
+			return deduplicated;
+		}
+
         function displayResults(results, format = 'json') {
-            const container = document.getElementById('resultsContainer');
-            
-            if (results.length === 0) {
-                container.innerHTML = '<div class="text-center text-muted p-5"><p>No results to display</p></div>';
-                return;
-            }
-            
-            // Format results based on selected format
-            if (format === 'json') {
-                // Create a JSON object with all results
-                const jsonData = {
-                    metadata: {
-                        topic: document.getElementById('topic').value,
-                        model: document.getElementById('model').value,
-                        created: new Date().toISOString(),
-                        count: results.length
-                    },
-                    data: results.map(item => {
-                        // Remove _meta field if it exists for clean output
-                        const { _meta, ...cleanItem } = item;
-                        return cleanItem;
-                    })
-                };
-                
-                container.innerHTML = `<pre class="m-0">${JSON.stringify(jsonData, null, 2)}</pre>`;
-            } else if (format === 'jsonl') {
-                // Format as JSON Lines (one JSON object per line)
-                const jsonlData = results.map(item => {
-                    const { _meta, ...cleanItem } = item;
-                    return JSON.stringify(cleanItem);
-                }).join('\n');
-                
-                container.innerHTML = `<pre class="m-0">${jsonlData}</pre>`;
-            } else if (format === 'xml') {
-                // Create an XML representation
-                let xmlOutput = '<?xml version="1.0" encoding="UTF-8"?>\n';
-                xmlOutput += `<dataset topic="${document.getElementById('topic').value}" model="${document.getElementById('model').value}" created="${new Date().toISOString()}" count="${results.length}">\n`;
-                
-                results.forEach(item => {
-                    xmlOutput += '  <item>\n';
-                    
-                    // If item.content is already XML, use it directly
-                    if (typeof item.content === 'string' && item.content.trim().startsWith('<')) {
-                        xmlOutput += `    ${item.content.trim()}\n`;
-                    } else {
-                        // Otherwise, add content as a CDATA section
-                        xmlOutput += `    <content><![CDATA[${item.content}]]></content>\n`;
-                    }
-                    
-                    // Add meta information
-                    if (item._meta) {
-                        xmlOutput += `    <meta>\n`;
-                        xmlOutput += `      <index>${item._meta.index}</index>\n`;
-                        xmlOutput += `      <tag>${item._meta.tag}</tag>\n`;
-                        xmlOutput += `    </meta>\n`;
-                    }
-                    
-                    xmlOutput += '  </item>\n';
-                });
-                
-                xmlOutput += '</dataset>';
-                
-                container.innerHTML = `<pre class="m-0">${escapeHtml(xmlOutput)}</pre>`;
-            }
-        }
+			const container = document.getElementById('resultsContainer');
+			
+			if (results.length === 0) {
+				container.innerHTML = '<div class="text-center text-muted p-5"><p>No results to display</p></div>';
+				return;
+			}
+			
+			// Apply deduplication if enabled
+			const processedResults = deduplicateResults(results);
+			
+			// Show deduplication stats if any were removed
+			if (processedResults.length < results.length) {
+				const removedCount = results.length - processedResults.length;
+				document.getElementById('progressStatus').textContent += ` (${removedCount} duplicates removed)`;
+			}
+			
+			// Format results based on selected format
+			if (format === 'json') {
+				// Create a JSON object with all results, preserving tags
+				const jsonData = {
+					metadata: {
+						topic: document.getElementById('topic').value,
+						model: document.getElementById('model').value,
+						created: new Date().toISOString(),
+						count: processedResults.length,
+						originalCount: results.length
+					},
+					data: processedResults.map(item => {
+						// Keep the tag in the main object
+						const result = {
+							...item.content,
+							format: item.format
+						};
+						
+						// Add tag as a top-level field
+						if (item._meta && item._meta.tag) {
+							result.tag = item._meta.tag;
+						}
+						
+						return result;
+					})
+				};
+				
+				container.innerHTML = `<pre class="m-0">${JSON.stringify(jsonData, null, 2)}</pre>`;
+			} else if (format === 'jsonl') {
+				// Format as JSON Lines (one JSON object per line)
+				const jsonlData = processedResults.map(item => {
+					const result = {
+						...item.content,
+						format: item.format
+					};
+					
+					// Add tag as a top-level field
+					if (item._meta && item._meta.tag) {
+						result.tag = item._meta.tag;
+					}
+					
+					return JSON.stringify(result);
+				}).join('\n');
+				
+				container.innerHTML = `<pre class="m-0">${jsonlData}</pre>`;
+			} else if (format === 'xml') {
+				// Create an XML representation
+				let xmlOutput = '<?xml version="1.0" encoding="UTF-8"?>\n';
+				xmlOutput += `<dataset topic="${document.getElementById('topic').value}" model="${document.getElementById('model').value}" created="${new Date().toISOString()}" count="${processedResults.length}">\n`;
+				
+				processedResults.forEach(item => {
+					xmlOutput += '  <item>\n';
+					
+					// Add tag as an attribute if available
+					const tagAttr = (item._meta && item._meta.tag) ? ` tag="${item._meta.tag}"` : '';
+					xmlOutput += `    <content${tagAttr}>\n`;
+					
+					// If item.content is already XML, use it directly
+					if (typeof item.content === 'string' && item.content.trim().startsWith('<')) {
+						xmlOutput += `      ${item.content.trim()}\n`;
+					} else {
+						// Otherwise, add content as a CDATA section
+						xmlOutput += `      <![CDATA[${JSON.stringify(item.content)}]]>\n`;
+					}
+					
+					xmlOutput += '    </content>\n';
+					xmlOutput += '  </item>\n';
+				});
+				
+				xmlOutput += '</dataset>';
+				
+				container.innerHTML = `<pre class="m-0">${escapeHtml(xmlOutput)}</pre>`;
+			}
+			
+			// Update current results with deduplicated version
+			if (processedResults.length < results.length) {
+				currentResults = processedResults;
+			}
+		}
         
         function escapeHtml(text) {
             return text
@@ -1708,81 +2008,97 @@ Format the response as valid {{format}} with "problem", "examples", "solution", 
         
         // Result Operations
         function downloadDataset() {
-            if (currentResults.length === 0) {
-                alert('No dataset to download');
-                return;
-            }
-            
-            const outputFormat = document.getElementById('outputFormat').value;
-            const filename = document.getElementById('filename').value || `dataset.${outputFormat}`;
-            
-            let content;
-            let mimeType;
-            
-            if (outputFormat === 'json') {
-                const jsonData = {
-                    metadata: {
-                        topic: document.getElementById('topic').value,
-                        model: document.getElementById('model').value,
-                        created: new Date().toISOString(),
-                        count: currentResults.length
-                    },
-                    data: currentResults.map(item => {
-                        const { _meta, ...cleanItem } = item;
-                        return cleanItem;
-                    })
-                };
-                
-                content = JSON.stringify(jsonData, null, 2);
-                mimeType = 'application/json';
-            } else if (outputFormat === 'jsonl') {
-                content = currentResults.map(item => {
-                    const { _meta, ...cleanItem } = item;
-                    return JSON.stringify(cleanItem);
-                }).join('\n');
-                mimeType = 'application/x-jsonlines';
-            } else if (outputFormat === 'xml') {
-                let xmlOutput = '<?xml version="1.0" encoding="UTF-8"?>\n';
-                xmlOutput += `<dataset topic="${document.getElementById('topic').value}" model="${document.getElementById('model').value}" created="${new Date().toISOString()}" count="${currentResults.length}">\n`;
-                
-                currentResults.forEach(item => {
-                    xmlOutput += '  <item>\n';
-                    
-                    // If item.content is already XML, use it directly
-                    if (typeof item.content === 'string' && item.content.trim().startsWith('<')) {
-                        xmlOutput += `    ${item.content.trim()}\n`;
-                    } else {
-                        // Otherwise, add content as a CDATA section
-                        xmlOutput += `    <content><![CDATA[${item.content}]]></content>\n`;
-                    }
-                    
-                    // Add meta information
-                    if (item._meta) {
-                        xmlOutput += `    <meta>\n`;
-                        xmlOutput += `      <index>${item._meta.index}</index>\n`;
-                        xmlOutput += `      <tag>${item._meta.tag}</tag>\n`;
-                        xmlOutput += `    </meta>\n`;
-                    }
-                    
-                    xmlOutput += '  </item>\n';
-                });
-                
-                xmlOutput += '</dataset>';
-                
-                content = xmlOutput;
-                mimeType = 'application/xml';
-            }
-            
-            const blob = new Blob([content], { type: mimeType });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-        }
+			if (currentResults.length === 0) {
+				alert('No dataset to download');
+				return;
+			}
+			
+			const outputFormat = document.getElementById('outputFormat').value;
+			const filename = document.getElementById('filename').value || `dataset.${outputFormat}`;
+			
+			let content;
+			let mimeType;
+			
+			if (outputFormat === 'json') {
+				const jsonData = {
+					metadata: {
+						topic: document.getElementById('topic').value,
+						model: document.getElementById('model').value,
+						created: new Date().toISOString(),
+						count: currentResults.length
+					},
+					data: currentResults.map(item => {
+						// Keep the tag in the main object
+						const result = {
+							...item.content,
+							format: item.format
+						};
+						
+						// Add tag as a top-level field
+						if (item._meta && item._meta.tag) {
+							result.tag = item._meta.tag;
+						}
+						
+						return result;
+					})
+				};
+				
+				content = JSON.stringify(jsonData, null, 2);
+				mimeType = 'application/json';
+			} else if (outputFormat === 'jsonl') {
+				content = currentResults.map(item => {
+					const result = {
+						...item.content,
+						format: item.format
+					};
+					
+					// Add tag as a top-level field
+					if (item._meta && item._meta.tag) {
+						result.tag = item._meta.tag;
+					}
+					
+					return JSON.stringify(result);
+				}).join('\n');
+				mimeType = 'application/x-jsonlines';
+			} else if (outputFormat === 'xml') {
+				let xmlOutput = '<?xml version="1.0" encoding="UTF-8"?>\n';
+				xmlOutput += `<dataset topic="${document.getElementById('topic').value}" model="${document.getElementById('model').value}" created="${new Date().toISOString()}" count="${currentResults.length}">\n`;
+				
+				currentResults.forEach(item => {
+					xmlOutput += '  <item>\n';
+					
+					// Add tag as an attribute if available
+					const tagAttr = (item._meta && item._meta.tag) ? ` tag="${item._meta.tag}"` : '';
+					xmlOutput += `    <content${tagAttr}>\n`;
+					
+					// If item.content is already XML, use it directly
+					if (typeof item.content === 'string' && item.content.trim().startsWith('<')) {
+						xmlOutput += `      ${item.content.trim()}\n`;
+					} else {
+						// Otherwise, add content as a CDATA section
+						xmlOutput += `      <![CDATA[${JSON.stringify(item.content)}]]>\n`;
+					}
+					
+					xmlOutput += '    </content>\n';
+					xmlOutput += '  </item>\n';
+				});
+				
+				xmlOutput += '</dataset>';
+				
+				content = xmlOutput;
+				mimeType = 'application/xml';
+			}
+			
+			const blob = new Blob([content], { type: mimeType });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = filename;
+			document.body.appendChild(a);
+			a.click();
+			document.body.removeChild(a);
+			URL.revokeObjectURL(url);
+		}
         
         function copyToClipboard() {
             const container = document.getElementById('resultsContainer');
